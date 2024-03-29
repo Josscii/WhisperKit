@@ -9,10 +9,12 @@ import Hub
 import TensorUtils
 import Tokenizers
 
+public typealias SegmentCallback = (([TranscriptionSegment]) -> Void?)?
+
 @available(macOS 13, iOS 16, watchOS 10, visionOS 1, *)
 public protocol Transcriber {
-    func transcribe(audioPath: String, decodeOptions: DecodingOptions?, callback: TranscriptionCallback) async throws -> TranscriptionResult?
-    func transcribe(audioArray: [Float], decodeOptions: DecodingOptions?, callback: TranscriptionCallback) async throws -> TranscriptionResult?
+    func transcribe(audioPath: String, decodeOptions: DecodingOptions?, callback: TranscriptionCallback, segmentCallback: SegmentCallback) async throws -> TranscriptionResult?
+    func transcribe(audioArray: [Float], decodeOptions: DecodingOptions?, callback: TranscriptionCallback, segmentCallback: SegmentCallback) async throws -> TranscriptionResult?
 }
 
 @available(macOS 13, iOS 16, watchOS 10, visionOS 1, *)
@@ -74,7 +76,7 @@ public class WhisperKit: Transcriber {
         download: Bool = true,
         useBackgroundDownloadSession: Bool = false
     ) async throws {
-        self.modelCompute = computeOptions ?? ModelComputeOptions()
+        modelCompute = computeOptions ?? ModelComputeOptions()
         self.audioProcessor = audioProcessor ?? AudioProcessor()
         self.featureExtractor = featureExtractor ?? FeatureExtractor()
         self.audioEncoder = audioEncoder ?? AudioEncoder()
@@ -384,10 +386,12 @@ public class WhisperKit: Transcriber {
 
     // MARK: - Transcribe audio file
 
-    public func transcribe(audioPath: String,
-                           decodeOptions: DecodingOptions? = nil,
-                           callback: TranscriptionCallback = nil) async throws -> TranscriptionResult?
-    {
+    public func transcribe(
+        audioPath: String,
+        decodeOptions: DecodingOptions? = nil,
+        callback: TranscriptionCallback = nil,
+        segmentCallback: SegmentCallback = nil
+    ) async throws -> TranscriptionResult? {
         if currentTimings == nil {
             currentTimings = TranscriptionTimings()
         }
@@ -411,22 +415,25 @@ public class WhisperKit: Transcriber {
         return try await transcribe(
             audioArray: audioArray,
             decodeOptions: decodeOptions,
-            callback: callback
+            callback: callback,
+            segmentCallback: segmentCallback
         )
     }
 
     // MARK: - Transcribe audio samples
 
-    public func transcribe(audioArray: [Float],
-                           decodeOptions: DecodingOptions? = nil,
-                           callback: TranscriptionCallback = nil) async throws -> TranscriptionResult?
-    {
+    public func transcribe(
+        audioArray: [Float],
+        decodeOptions: DecodingOptions? = nil,
+        callback: TranscriptionCallback = nil,
+        segmentCallback: SegmentCallback = nil
+    ) async throws -> TranscriptionResult? {
         progress.completedUnitCount = 0
         if currentTimings == nil {
             currentTimings = TranscriptionTimings()
         }
 
-        if self.modelState != .loaded {
+        if modelState != .loaded {
             try await loadModels()
         }
 
@@ -435,7 +442,7 @@ public class WhisperKit: Transcriber {
 
         var options = decodeOptions ?? DecodingOptions()
         options.verbose = Logging.shared.logLevel != .none
-        
+
         var detectedLanguage: String?
 
         let contentFrames = audioArray.count
@@ -636,6 +643,8 @@ public class WhisperKit: Transcriber {
                     }
                 }
 
+                segmentCallback?(currentSegments)
+
                 // add them to the `allSegments` list
                 allSegments.append(contentsOf: currentSegments)
                 let allCurrentTokens = currentSegments.flatMap { $0.tokens }
@@ -658,7 +667,7 @@ public class WhisperKit: Transcriber {
             callback: TranscriptionCallback = nil
         ) async throws -> DecodingResult? {
             // Fallback `options.temperatureFallbackCount` times with increasing temperatures, starting at `options.temperature`
-            let temperatures = (0...options.temperatureFallbackCount).map { FloatType(options.temperature) + FloatType($0) * FloatType(options.temperatureIncrementOnFallback) }
+            let temperatures = (0 ... options.temperatureFallbackCount).map { FloatType(options.temperature) + FloatType($0) * FloatType(options.temperatureIncrementOnFallback) }
 
             Logging.debug("Decoding with tempeartures \(temperatures)")
 
@@ -669,7 +678,7 @@ public class WhisperKit: Transcriber {
                 let decodeWithFallbackStart = Date()
 
                 let tokenSampler = GreedyTokenSampler(temperature: temp, eotToken: tokenizer.specialTokens.endToken, decodingOptions: options)
-                
+
                 var currentDecodingOptions = options
                 // For a multilingual model, if language is not passed and usePrefill is false, detect language and set in options
                 if modelVariant.isMultilingual, options.language == nil, !options.usePrefillPrompt {

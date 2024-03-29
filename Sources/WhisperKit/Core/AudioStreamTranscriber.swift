@@ -198,12 +198,12 @@ public actor AudioStreamTranscriber {
         var options = decodingOptions
         options.clipTimestamps = [state.lastConfirmedSegmentEndSeconds]
         let checkWindow = compressionCheckWindow
-        return try await transcriber.transcribe(audioArray: samples, decodeOptions: options) { [weak self] progress in
+        return try await transcriber.transcribe(audioArray: samples, decodeOptions: options, callback: { [weak self] progress in
             Task { [weak self] in
                 await self?.onProgressCallback(progress)
             }
             return AudioStreamTranscriber.shouldStopEarly(progress: progress, options: options, compressionCheckWindow: checkWindow)
-        }
+        }, segmentCallback: nil)
     }
 
     private static func shouldStopEarly(
